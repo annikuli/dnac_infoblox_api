@@ -1,0 +1,403 @@
+{
+	"info": {
+		"_postman_id": "895c45ef-194c-4c7b-a2b2-db737926eee3",
+		"name": "DNAC & Infoblox",
+		"description": "This API collection is built to pull IP pools from DNAC and push them into Infoblox IPAM.\n\nIt helps to avoid limitations of DNAC and Infoblox native integration.\n\nMore specifically - it doesn't require parent pool to be empty in Infoblox.\n\n**It is assumed that Infoblox is also used as DHCP server. And is the only DHCP server in the environment.**\n\nCollection workflow:\n\n1. Collect all IP pools reserved for specified Site in DNAC\n2. Convert DNAC response into proper format for Infoblox\n3. Push converted data into Infoblox.\n    \n\nYou can run all requests in the collection automatically for complete workflow.\n\nOr you can:\n\n- run DNAC folder first (responsible for steps 1 & 2 in workflow).\n- Review converted data in \"infoblox_ready_data\" env. variable.\n- And run Infoblox folder (responsible for step 3 of workflow)\n    \n\n---\n\nINITIAL SETUP:\n\n1. Set mandatory collection variables.(Select DNAC & Infoblox collection and open Variables tab. Set proper values in both INITIAL and CURRENT VALUE fields):\n    1. \"dnac_ip\" - Specify DNAC IP or FQDN\n    2. \"infoblox_ip\" - Specify Infoblox IP or FQDN\n    3. \"site_path\" - Specify target DNAC Hierarchy Site in format: \"Global/Area/Building\".\n2. Specify DNAC credentials in DNAC/Authentication request. Authorization field.\n3. Specify Infoblox credentials in Infoblox/Authentication request. Authorization field.\n    \n\n---\n\nBuilt for:\n\nDNAC 2.2.2.3 (API v1.0)\n\nInfoblox 8.4.4 (API v2.10)\n\n_API versions can be changed via collection variables_",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "23835599"
+	},
+	"item": [
+		{
+			"name": "DNAC",
+			"item": [
+				{
+					"name": "Authentication",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"// save access token into collection variable",
+									"var jsonData = JSON.parse(responseBody);",
+									"pm.collectionVariables.set(\"token\", jsonData.Token);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "basic",
+							"basic": [
+								{
+									"key": "password",
+									"value": "",
+									"type": "string"
+								},
+								{
+									"key": "username",
+									"value": "admin",
+									"type": "string"
+								}
+							]
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "https://{{dnac_ip}}/dna/system/api/{{dnac_api_version}}/auth/token",
+							"protocol": "https",
+							"host": [
+								"{{dnac_ip}}"
+							],
+							"path": [
+								"dna",
+								"system",
+								"api",
+								"{{dnac_api_version}}",
+								"auth",
+								"token"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Site ID",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"// save site id into collection variable",
+									"var jsonData = JSON.parse(responseBody);",
+									"pm.collectionVariables.set(\"site_id\", jsonData.response[0].id);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "GET",
+						"header": [
+							{
+								"key": "X-Auth-Token",
+								"value": "{{token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "https://{{dnac_ip}}/dna/intent/api/{{dnac_api_version}}/site?name={{site_path}}",
+							"protocol": "https",
+							"host": [
+								"{{dnac_ip}}"
+							],
+							"path": [
+								"dna",
+								"intent",
+								"api",
+								"{{dnac_api_version}}",
+								"site"
+							],
+							"query": [
+								{
+									"key": "name",
+									"value": "{{site_path}}"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get IP Pools",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"// DNAC API response data format is different from API requests format of Infoblox.",
+									"// This script converts data into Infoblox format and save into collection variable named infoblox_ready_data.",
+									"// The script supports addition of DNS and Default Gateway DHCP options.",
+									"",
+									"var infoblox_ip_pools_str;",
+									"const infoblox_ip_pools = [];",
+									"",
+									"",
+									"",
+									"function convertJson(dnac_data) {",
+									"",
+									"  // this dictionary represent proper request format required by Infoblox API.",
+									"  var infoblox_pool = {",
+									"  \"method\": \"POST\",",
+									"  \"object\": \"network\",",
+									"  \"data\": {",
+									"      \"network\": \"\",",
+									"      \"network_view\": \"dnac\",",
+									"      // you can add custom comment to the network to be displayed in Infoblox.",
+									"      \"comment\": \"created via api\",",
+									"      \"disable\": false,",
+									"      \"options\": [],",
+									"      \"use_options\": true",
+									"  }",
+									"  };",
+									"",
+									"  // Next two dictionaries represent DHCP options (DNS and Default Gateway). Data format is compliant with Infoblox API documentation.",
+									"  var dns_option = {",
+									"      \"name\": \"domain-name-servers\",",
+									"      \"num\": 6,",
+									"      \"use_option\": true,",
+									"      \"value\": \"\",",
+									"      \"vendor_class\": \"DHCP\"",
+									"  };",
+									"  var router_option = {",
+									"      \"name\": \"routers\",",
+									"      \"num\": 3,",
+									"      \"use_option\": true,",
+									"      \"value\": \"\",",
+									"      \"vendor_class\": \"DHCP\"",
+									"  };",
+									"",
+									"  // Next section populates Infoblox request fields with corresponding data from DNAC response. And returns dictionary.",
+									"  infoblox_pool[\"data\"][\"network\"] = dnac_data[\"ipPools\"][0][\"ipPoolCidr\"];",
+									"  infoblox_pool[\"data\"][\"comment\"] = dnac_data[\"ipPools\"][0][\"ipPoolName\"];",
+									"  // Disable network for DHCP in Infoblox if no server is configured for the ip pool in DNAC.",
+									"  if (dnac_data[\"ipPools\"][0][\"dhcpServerIps\"].length === 0) {",
+									"      infoblox_pool[\"data\"][\"disable\"] = true;",
+									"  }",
+									"  // Add DNS option",
+									"  if (dnac_data[\"ipPools\"][0][\"dnsServerIps\"].length > 0) {",
+									"      dns_option[\"value\"] = dnac_data[\"ipPools\"][0][\"dnsServerIps\"].toString();",
+									"      infoblox_pool[\"data\"][\"options\"].push(dns_option)",
+									"  }",
+									"  // Add Default Gateway option",
+									"  if (dnac_data[\"ipPools\"][0][\"gateways\"].length > 0) {",
+									"      router_option[\"value\"] = dnac_data[\"ipPools\"][0][\"gateways\"][0];",
+									"      infoblox_pool[\"data\"][\"options\"].push(router_option)",
+									"  }",
+									"  return infoblox_pool;",
+									"}",
+									"",
+									"",
+									"// Parse DNAC response into json format.",
+									"var jsonData = JSON.parse(responseBody);",
+									"",
+									"// Loop through all IP pools and populate necessary fields into Infoblox requiest.",
+									"for (var ip_pool, _pj_c = 0, _pj_a = jsonData.response, _pj_b = _pj_a.length; _pj_c < _pj_b; _pj_c += 1) {",
+									"  ip_pool = _pj_a[_pj_c];",
+									"  infoblox_pool = convertJson(ip_pool);",
+									"  infoblox_ip_pools.push(infoblox_pool);",
+									"}",
+									"",
+									"// Data converted in Infoblox format and ready to be sent. It is saved into collection variable named infoblox_ready_data.",
+									"// It can be copied into notpad and reviewed prior pushing to Infoblox.",
+									"infoblox_ip_pools_str = JSON.stringify(infoblox_ip_pools);",
+									"pm.collectionVariables.set(\"infoblox_ready_data\", infoblox_ip_pools_str);",
+									""
+								],
+								"type": "text/javascript"
+							}
+						},
+						{
+							"listen": "prerequest",
+							"script": {
+								"exec": [
+									""
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "GET",
+						"header": [
+							{
+								"key": "X-Auth-Token",
+								"value": "{{token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "https://{{dnac_ip}}/dna/intent/api/{{dnac_api_version}}/reserve-ip-subpool?siteId={{site_id}}",
+							"protocol": "https",
+							"host": [
+								"{{dnac_ip}}"
+							],
+							"path": [
+								"dna",
+								"intent",
+								"api",
+								"{{dnac_api_version}}",
+								"reserve-ip-subpool"
+							],
+							"query": [
+								{
+									"key": "siteId",
+									"value": "{{site_id}}"
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Infoblox",
+			"item": [
+				{
+					"name": "Authentication",
+					"request": {
+						"auth": {
+							"type": "basic",
+							"basic": [
+								{
+									"key": "password",
+									"value": "",
+									"type": "string"
+								},
+								{
+									"key": "username",
+									"value": "admin",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "https://{{infoblox_ip}}/wapi/{{infoblox_api_version}}/record:host?_return_as_object=1",
+							"protocol": "https",
+							"host": [
+								"{{infoblox_ip}}"
+							],
+							"path": [
+								"wapi",
+								"{{infoblox_api_version}}",
+								"record:host"
+							],
+							"query": [
+								{
+									"key": "_return_as_object",
+									"value": "1"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Push IP Pools",
+					"event": [
+						{
+							"listen": "prerequest",
+							"script": {
+								"exec": [
+									""
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{{infoblox_ready_data}}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "https://{{infoblox_ip}}/wapi/{{infoblox_api_version}}/request",
+							"protocol": "https",
+							"host": [
+								"{{infoblox_ip}}"
+							],
+							"path": [
+								"wapi",
+								"{{infoblox_api_version}}",
+								"request"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "site_path",
+			"value": "Global/Cisco_PL/KRK/ENT_PARK",
+			"type": "string"
+		},
+		{
+			"key": "token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "site_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "infoblox_ready_data",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "dnac_ip",
+			"value": "172.17.3.101",
+			"type": "string"
+		},
+		{
+			"key": "infoblox_ip",
+			"value": "172.17.3.203",
+			"type": "string"
+		},
+		{
+			"key": "dnac_api_version",
+			"value": "v1"
+		},
+		{
+			"key": "infoblox_api_version",
+			"value": "v2.10"
+		}
+	]
+}

@@ -1,6 +1,6 @@
 # DNAC & Infoblox integration via API
 
-This API collection is built to pull IP pools from DNAC and push them into Infoblox IPAM.
+This Postman API collection is built to pull IP pools from DNAC and push them into Infoblox IPAM.
 
 
 It helps to avoid limitations of DNAC and Infoblox native integration.
